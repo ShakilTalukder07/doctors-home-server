@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const jwt = require('jsonwebtoken');
 require('dotenv').config()
 const port = process.env.PORT || 5000;
 
@@ -20,29 +21,116 @@ async function run() {
     try {
         const appointmentOptionCollection = client.db('doctorsHome').collection('appointmentOption')
         const bookingsCollection = client.db('doctorsHome').collection('bookings')
+        const usersCollection = client.db('doctorsHome').collection('users')
 
         app.get('/appointmentOption', async (req, res) => {
-            const date = req.body.date;
-            console.log(date);
+            const date = req.query.date;
+
             const query = {};
             const options = await appointmentOptionCollection.find(query).toArray();
 
             // get the booking of the provided date 
             const bookingQuery = { appointmentDate: date }
             const alreadyBooked = await bookingsCollection.find(bookingQuery).toArray();
-            // options.forEach(option => {
-            //     const optionBooked = alreadyBooked.filter( book => book.treatment === option.name )
-            //     const bookedSlots = optionBooked.map( book => book.slot)
-            //     const remainingSlots = option.slots.filter( slot => !bookedSlots.includes(slot) )
-            //     // option.slot = remainingSlots;
-            //     // console.log(date, option.name, remainingSlots.length);
-            // })
+
+            options.forEach(option => {
+                const optionBooked = alreadyBooked.filter(book => book.treatment === option.name);
+
+                const bookedSlots = optionBooked.map(book => book.slot)
+                const remainingSlots = option.slots.filter(slot => !bookedSlots.includes(slot))
+                option.slots = remainingSlots;
+                // console.log(date, option.name, remainingSlots.length);
+            })
             res.send(options);
+        })
+
+
+        app.get('/v2/appointmentOption', async (req, res) => {
+            const date = req.query.date;
+            const options = await appointmentOptionCollection.aggregate([
+                {
+                    $lookup: {
+                        from: 'bookings',
+                        localField: 'name',
+                        foreignField: 'treatment',
+                        pipeline: [
+                            {
+                                $match: {
+                                    $expr: {
+                                        $eq: ['$appointmentDate', date]
+                                    }
+                                }
+                            }
+                        ],
+                        as: 'booked'
+                    }
+                },
+                {
+                    $project: {
+                        name: 1,
+                        slots: 1,
+                        booked: {
+                            $map: {
+                                input: '$booked',
+                                as: 'book',
+                                in: '$$book.slot'
+                            }
+                        }
+                    }
+                },
+                {
+                    $project: {
+                        name: 1,
+                        slots: {
+                            $setDifference: ['$slots', '$booked']
+                        }
+                    }
+                }
+            ]).toArray();
+            res.send(options);
+        })
+
+
+        app.get('/bookings', async (req, res) => {
+            const email = req.query.email;
+            const query = { email: email };
+            const bookings = await bookingsCollection.find(query).toArray()
+            res.send(bookings);
         })
 
         app.post('/bookings', async (req, res) => {
             const booking = req.body;
+            const query = {
+                appointmentDate: booking.appointmentDate,
+                email: booking.email,
+                treatment: booking.treatment
+            }
+            const alreadyBooked = await bookingsCollection.find(query).toArray();
+
+            if (alreadyBooked.length) {
+                const message = (`You already have a booking on ${booking.appointmentDate}`)
+                return res.send({ acknowledged: false, message })
+
+            }
+
             const result = await bookingsCollection.insertOne(booking);
+            res.send(result);
+        });
+
+        app.get('/jwt', async (req, res) => {
+            const email = req.query.email;
+            const query = { email: email };
+            const user = await usersCollection.findOne(query);
+            if (user) {
+                const token = jwt.sign({ email }, process.env.ACCESS_TOKEN, { expiresIn: '1d' })
+                return res.send({ accessToken: token });
+            }
+            res.status(401).send({ accessToken: '' })
+        })
+
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+            const result = await usersCollection.insertOne(user);
             res.send(result);
         })
 
