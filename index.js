@@ -3,6 +3,8 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 require('dotenv').config()
+const nodemailer = require('nodemailer');
+const mg = require('nodemailer-mailgun-transport');
 const stripe = require("stripe")(process.env.STRIPE_SECRET_kEY);
 
 
@@ -18,7 +20,46 @@ app.use(express.json());
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.1ndgjy2.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
 
+// function for send email from backend, using nodemailer-mailgun-transport
+function sendBookingEmail(booking) {
+    const { email, treatment, slot, appointmentDate } = booking
 
+    const auth = {
+        auth: {
+            api_key: process.env.EMAIL_SEND_KEY,
+            domain: process.env.EMAIL_SEND_DOMAIN
+        }
+    }
+
+    const transporter = nodemailer.createTransport(mg(auth));
+
+    transporter.sendMail({
+        from: 'shakil.talukder07@gmail.com',
+        to: email, // An array if you have multiple recipients.
+        subject: `Your appointment for ${treatment} is confirmed`,
+        //You can use "html:" to send HTML email content. It's magic!
+        html: `
+    <h3>Your appointment is confirmed</h3>,
+    <div>
+        <p>Your Appointment for treatment: ${treatment}.</p>
+        <p>Please visit us on: ${appointmentDate} at ${slot}</p>
+        <p>Thanks from doctors portal.</p>
+    </div>
+    `,
+        //You can use "text:" to send plain-text content. It's oldschool!
+        text: 'Mailgun rocks, pow pow!'
+    }, (err, info) => {
+        if (err) {
+            console.log(`Error: ${err}`);
+        }
+        else {
+            console.log(`Response: ${info}`);
+        }
+    });
+}
+
+
+// verify JWT
 function verifyJWT(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -165,6 +206,7 @@ async function run() {
                 return res.send({ acknowledged: false, message })
             }
             const result = await bookingsCollection.insertOne(booking);
+            sendBookingEmail(booking)
             res.send(result);
         });
 
@@ -193,8 +235,8 @@ async function run() {
             const filter = { _id: ObjectId(id) }
             const updatedDoc = {
                 $set: {
-                    paid : true,
-                    transactionId : payment.transactionId
+                    paid: true,
+                    transactionId: payment.transactionId
                 }
             }
             const updatedResult = await bookingsCollection.updateOne(filter, updatedDoc)
